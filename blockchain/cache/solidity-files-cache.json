@@ -1,0 +1,41 @@
+{
+  "_format": "hh-sol-cache-2",
+  "files": {
+    "C:\\Users\\Praveen Koujalagi\\OneDrive\\Desktop\\apt-guardian-starter\\blockchain\\contracts\\IncidentLog.sol": {
+      "lastModificationDate": 1755238513157,
+      "contentHash": "7b499c3b82b4f9678446e0a2a6ec180a",
+      "sourceName": "contracts/IncidentLog.sol",
+      "solcConfig": {
+        "version": "0.8.24",
+        "settings": {
+          "evmVersion": "paris",
+          "optimizer": {
+            "enabled": false,
+            "runs": 200
+          },
+          "outputSelection": {
+            "*": {
+              "*": [
+                "abi",
+                "evm.bytecode",
+                "evm.deployedBytecode",
+                "evm.methodIdentifiers",
+                "metadata"
+              ],
+              "": [
+                "ast"
+              ]
+            }
+          }
+        }
+      },
+      "imports": [],
+      "versionPragmas": [
+        "^0.8.24"
+      ],
+      "artifacts": [
+        "IncidentLog"
+      ]
+    }
+  }
+}
