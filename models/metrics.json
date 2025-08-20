@@ -1,0 +1,42 @@
+{
+  "RandomForest": {
+    "accuracy": 0.9999166666666667,
+    "precision": 0.9999079062485611,
+    "recall": 1.0,
+    "f1": 0.9999539510038681,
+    "confusion_matrix": [
+      [
+        2283,
+        2
+      ],
+      [
+        0,
+        21715
+      ]
+    ],
+    "scale_pos_weight": 1.0,
+    "n_train": 96000,
+    "n_test": 24000,
+    "smote_applied": false
+  },
+  "XGBoost": {
+    "accuracy": 0.9999166666666667,
+    "precision": 0.9999079062485611,
+    "recall": 1.0,
+    "f1": 0.9999539510038681,
+    "confusion_matrix": [
+      [
+        2283,
+        2
+      ],
+      [
+        0,
+        21715
+      ]
+    ],
+    "scale_pos_weight": 1.0,
+    "n_train": 96000,
+    "n_test": 24000,
+    "smote_applied": false
+  }
+}
