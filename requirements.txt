@@ -1,0 +1,43 @@
+# Dashboard
+streamlit
+plotly
+pyvis
+networkx
+
+# Machine Learning / Deep Learning
+scikit-learn
+xgboost
+lightgbm
+torch
+torchvision
+torchaudio
+tensorflow
+joblib
+
+# Graph Neural Networks (GNN)
+torch-geometric
+torch-scatter
+torch-sparse
+torch-cluster
+torch-spline-conv
+
+# Blockchain
+web3
+eth-account
+py-solc-x
+
+# Databases
+pymongo
+neo4j
+
+# Networking / Packet Capture
+scapy
+pyshark
+
+# Utilities
+pandas
+numpy
+matplotlib
+seaborn
+tqdm
+imbalanced-learn
