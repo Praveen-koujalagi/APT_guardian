@@ -24,3 +24,4 @@ node_modules/
 coverage/
 *.sqlite
 *.db
+node_modules

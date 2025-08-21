@@ -258,7 +258,18 @@ def auto_preprocess(df: pd.DataFrame, scaler_type: str = "standard", one_hot_max
         df[num_cols_final] = scaler.fit_transform(numeric_block.astype(float))
     X = df[feature_cols]
     y = df[label_col]
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size, stratify=y, random_state=random_state)
+    # For very small datasets where a class has <2 samples, disable stratification
+    disable_strat = False
+    try:
+        class_counts = y.value_counts()
+        if (class_counts < 2).any() or len(class_counts) < 2:
+            disable_strat = True
+    except Exception:
+        disable_strat = True
+    if disable_strat:
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size, random_state=random_state)
+    else:
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size, stratify=y, random_state=random_state)
     smote_applied = False
     if apply_smote and _HAS_SMOTE:
         # Only apply if minority class proportion < 0.3
@@ -276,6 +287,14 @@ def auto_preprocess(df: pd.DataFrame, scaler_type: str = "standard", one_hot_max
         "label_col": label_col,
         "dropped_high_card": high_card_dropped,
         "smote_applied": smote_applied,
+        "feature_stats": {
+            c: {
+                "mean": float(df[c].mean()),
+                "std": float(df[c].std(ddof=0) if df[c].std(ddof=0) == df[c].std(ddof=0) else 0.0),
+                "min": float(df[c].min()),
+                "max": float(df[c].max()),
+            } for c in num_cols_final
+        }
     }
     out.update({
         "X_train": X_train,

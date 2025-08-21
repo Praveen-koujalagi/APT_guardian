@@ -2,7 +2,7 @@
 
 An AI-driven platform for detecting Advanced Persistent Threats (APTs) with multi-model analytics, automatic preprocessing, blockchain-backed incident logging, and graph-based network context visualization.
 
-> Status: Core scaffolding, automatic preprocessing, model training (RandomForest & XGBoost) and Streamlit dashboard are working. Live capture, deep models, blockchain & graph DB integrations are stubs to be expanded.
+> Status: Baseline + deep model scaffolds implemented (RandomForest, XGBoost, LSTM/GRU placeholder, GNN placeholder), synthetic live capture, blockchain stub logging, graph visualization, drift detection and test harness operational. Further hardening & real environment integrations (real packet sniff, full GNN) remain.
 
 ---
 ## ✨ Features (Current & Planned)
@@ -10,10 +10,15 @@ An AI-driven platform for detecting Advanced Persistent Threats (APTs) with mult
 - Streamlit dashboard with modular tabs (Dashboard, Network Analysis, Threat Intelligence, Blockchain Logs)
 - Automatic preprocessing pipeline (feature dropping, categorical encoding, scaling, outlier capping, optional SMOTE)
 - Multi-dataset aggregation & training script (`train_baseline.py`)
-- RandomForest & XGBoost model training + persisted artifacts (models, scaler, metrics, feature list)
-- Basic inference with ensemble/fallback heuristic
-- Solidity `IncidentLog` contract scaffold
-- Configurable UI model selection and (placeholder) blockchain / DB toggles
+- RandomForest & XGBoost model training + persisted artifacts (models, scaler, metrics, feature list, feature stats)
+- Deep model stubs: LSTM/GRU sequence trainer & GNN (GraphSAGE fallback) with `.pt` persistence
+- Ensemble inference across classical + deep models (probability averaging)
+- Synthetic / real (scapy if available) packet capture with flow assembly
+- Blockchain IncidentLog contract, stub deployment & event logging API (Web3 optional)
+- MongoDB alert logging / stub buffer; PyVis-based network graph visualization with risk coloring
+- Drift detection (PSI) & adversarial input sanitation
+- Test harness (`pytest`) covering preprocessing, training/inference, blockchain stub, drift detection
+- GitHub Actions CI (lightweight dependency set) running tests on push/PR
 
 **Planned / Roadmap**
 - Packet capture flow assembler (Scapy / PyShark) feeding live mode
@@ -102,18 +107,19 @@ Current contract & client stubs are placeholders; deployment scripts to come.
 |-------|---------|--------|
 | RandomForest | Baseline tabular detection | Implemented |
 | XGBoost | Gradient boosting performance baseline | Implemented |
-| LSTM / GRU | Temporal patterns in sequential flows | Planned |
-| GNN (GraphSAGE / GAT) | Host-communication graph inference | Planned |
+| LSTM / GRU | Temporal patterns in sequential flows | Prototype (sequence batching simplification) |
+| GNN (GraphSAGE / GAT) | Host-communication graph inference | Prototype (fallback if torch-geometric missing) |
 
 ---
 ## 🛣 Roadmap (Next Milestones)
-1. Real packet capture -> flow aggregation (5‑tuple + rolling stats)
-2. Contract deployment script + logging pipeline
-3. MongoDB/Neo4j integration & graph persistence
-4. GNN feature extraction & prototype model
-5. LSTM sequence modeling on ordered flows (per host / session)
-6. Threat intel feed enrichment (e.g., abuse IP DB / custom lists)
-7. Comprehensive test harness & CI workflow
+1. Elevate packet capture to full flow feature enrichment (rolling stats, time deltas)
+2. Harden blockchain path (real deployment, event polling & confirmations)
+3. Neo4j integration (persistence + advanced queries) & risk propagation algorithms
+4. Replace prototype GNN with full GraphSAGE/GAT training on host graph
+5. True temporal sequence construction per host/session for LSTM/GRU
+6. Threat intel enrichment (external feeds, reputation scores) & correlation
+7. Expand tests (drift scenario simulations, security sanitation edge cases)
+8. Add model artifact signing & verification
 
 ---
 ## 🏷 Versioning & Releases
