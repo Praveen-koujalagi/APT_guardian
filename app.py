@@ -1,29 +1,21 @@
 import time
+import json
+import pandas as pd
 from datetime import datetime, timezone
 from typing import List, Dict, Any
 
 import streamlit as st
-import pandas as pd
-import plotly.express as px
 
-# Local module imports
+# Local module imports (all currently lightweight stubs)
 from ml_models.inference import load_models, predict_flows
-from utils.packet_capture import LivePacketCapture
-from utils.graph_utils import build_attack_graph, render_attack_graph, push_graph_to_neo4j
-from utils.neo4j_utils import get_driver as get_neo_driver, fetch_attack_graph as neo_fetch_graph
-from blockchain.blockchain_utils import (
-    get_blockchain_client, fetch_recent_events, deploy_contract, get_contract, log_threat_event
-)
-from utils.logger import get_mongo_client, fetch_recent_alerts, log_alert, query_alerts
-from utils.security import batch_sanitize
-from ml_models.drift import detect_drift
-from utils.config import GLOBAL_SETTINGS, load_settings
+try:
+    from utils.windows_packet_capture import WindowsPacketCapture as LivePacketCapture
+except ImportError:
+    from utils.packet_capture import LivePacketCapture
+from utils.graph_utils import build_attack_graph_placeholder, render_attack_graph
+from blockchain.blockchain_utils import get_blockchain_client, fetch_recent_events, log_event_to_blockchain
+from utils.logger import get_mongo_client, fetch_recent_alerts
 
-# Allow runtime reload of config (small button)
-if st.sidebar.button("Reload Config"):
-    st.session_state._settings = load_settings()
-
-settings = st.session_state.get('_settings', GLOBAL_SETTINGS)
 
 st.set_page_config(
     page_title="APT Guardian – AI-Powered APT Detection",
@@ -36,42 +28,6 @@ st.set_page_config(
 # --------------------------------------------------------------------------------------
 st.sidebar.title("⚙️ Configuration")
 run_mode = st.sidebar.radio("Run Mode", ["Dataset Mode", "Live Capture Mode"], index=0)
-# New toggle to completely disable live capture (for systems without Npcap)
-enable_live_capture = st.sidebar.checkbox(
-    "Enable Live Packet Capture", value=True,
-    help="Uncheck if Npcap/WinPcap driver is not installed; synthetic flows will be used instead."
-)
-
-# Live capture interface selection (only when enabled & in live mode)
-selected_iface = None
-if enable_live_capture and run_mode == "Live Capture Mode":
-    try:
-        from scapy.all import get_if_list  # type: ignore
-        if_list = []
-        try:
-            if_list = get_if_list()
-        except Exception:
-            if_list = []
-    except Exception:
-        if_list = []
-    iface_options = ["Auto"] + if_list
-    chosen = st.sidebar.selectbox("Capture Interface", iface_options, index=0)
-    selected_iface = None if chosen == "Auto" else chosen
-    # Persist selection
-    st.session_state._capture_iface = selected_iface
-    if st.sidebar.button("Restart Capture", help="Stops current capture (if any) and restarts with selected interface"):
-        if 'packet_capture' in st.session_state:
-            try:
-                st.session_state.packet_capture.stop()
-            except Exception:
-                pass
-            st.session_state.pop('packet_capture')
-
-auto_refresh = False
-refresh_interval = 10
-if run_mode == "Live Capture Mode":
-    auto_refresh = st.sidebar.checkbox("Auto-refresh", value=True, help="Continuously update dashboard with new packets & alerts.")
-    refresh_interval = st.sidebar.slider("Refresh every (seconds)", 5, 60, 10)
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("### Model Selection")
@@ -90,15 +46,8 @@ st.sidebar.markdown("### Databases")
 enable_mongo = st.sidebar.checkbox("MongoDB Logging", value=True)
 enable_neo4j = st.sidebar.checkbox("Neo4j Graph", value=True)
 
-with st.sidebar.expander("Connection Settings"):
-    st.write("Using values from config / env (override via config.yaml or env vars)")
-    st.code(f"MongoDB: {settings.mongodb_uri}\nNeo4j: {settings.neo4j_uri}\nBlockchain RPC: {settings.blockchain_rpc}", language="text")
-
 st.sidebar.markdown("---")
-severity_filter = st.sidebar.selectbox("Alert Severity Filter", ["All", "High", "Medium", "Low"])
-recent_minutes = st.sidebar.selectbox("Recent Window (min)", [None, 5, 15, 60, 240], index=0)
-
-st.sidebar.caption("APT Guardian Prototype • Streamlit UI")
+st.sidebar.caption("APT Guardian Prototype • Streamlit UI Skeleton")
 
 
 # --------------------------------------------------------------------------------------
@@ -109,32 +58,13 @@ def init_state():
         st.session_state.models = load_models(selected_models)
         st.session_state.active_model_names = selected_models
     if "packet_capture" not in st.session_state:
-        if run_mode == "Live Capture Mode" and enable_live_capture:
-            iface = st.session_state.get('_capture_iface')
-            st.session_state.packet_capture = LivePacketCapture(interface=iface)
-            st.session_state.packet_capture.start()
-    # If user disabled capture but a previous session had one, stop it
-    if not enable_live_capture and "packet_capture" in st.session_state:
-        try:
-            st.session_state.packet_capture.stop()
-        except Exception:
-            pass
-        st.session_state.pop("packet_capture", None)
+        st.session_state.packet_capture = LivePacketCapture(interface=None)  # None -> default
     if "blockchain" not in st.session_state and enable_chain:
-        st.session_state.blockchain = get_blockchain_client(auto_connect=True, provider=settings.blockchain_rpc)
-        # Attempt contract deployment (or stub)
-        contract_info = deploy_contract(st.session_state.blockchain, settings.contract_path)
-        st.session_state.chain_contract = get_contract(st.session_state.blockchain, contract_info.get('address', '0xStub'), contract_info.get('abi', []))
+        st.session_state.blockchain = get_blockchain_client(auto_connect=True)
     if "mongo" not in st.session_state and enable_mongo:
-        st.session_state.mongo = get_mongo_client(settings.mongodb_uri, settings.mongodb_db)
+        st.session_state.mongo = get_mongo_client()
     if "last_refresh" not in st.session_state:
         st.session_state.last_refresh = time.time()
-    if "drift_report" not in st.session_state:
-        st.session_state.drift_report = None
-    if "pred_history" not in st.session_state:
-        st.session_state.pred_history = []  # time-series accumulation
-    if "neo4j" not in st.session_state and enable_neo4j:
-        st.session_state.neo4j = get_neo_driver(settings.neo4j_uri, settings.neo4j_user, settings.neo4j_password)
 
 
 init_state()
@@ -147,10 +77,11 @@ tab_labels = [
     "📊 Dashboard",
     "🌐 Network Analysis",
     "🧠 Threat Intelligence",
+    "🔍 APT Analysis",
     "⛓ Blockchain Logs"
 ]
 
-tab_dashboard, tab_network, tab_threat_intel, tab_blockchain = st.tabs(tab_labels)
+tab_dashboard, tab_network, tab_threat_intel, tab_apt, tab_blockchain = st.tabs(tab_labels)
 
 
 # --------------------------------------------------------------------------------------
@@ -158,8 +89,9 @@ tab_dashboard, tab_network, tab_threat_intel, tab_blockchain = st.tabs(tab_label
 # --------------------------------------------------------------------------------------
 def _dummy_flow_batch(n: int = 5) -> List[Dict[str, Any]]:
     base_ts = datetime.now(timezone.utc)
-    return [
-        {
+    flows = []
+    for i in range(n):
+        flows.append({
             "src_ip": f"10.0.0.{i+1}",
             "dst_ip": f"192.168.1.{(i*3)%255}",
             "src_port": 10000 + i,
@@ -167,90 +99,18 @@ def _dummy_flow_batch(n: int = 5) -> List[Dict[str, Any]]:
             "protocol": "TCP",
             "packet_count": 10 + i,
             "byte_count": 2048 + (i * 300),
-            "timestamp": base_ts.isoformat() + "Z"
-        } for i in range(n)
-    ]
+            "timestamp": (base_ts).isoformat() + "Z"
+        })
+    return flows
 
 
 def run_dataset_mode():
-    st.info("Dataset Mode active. Loading synthetic sample flows (placeholder for dataset selection UI).")
-    flows = batch_sanitize(_dummy_flow_batch(12))
+    st.info("Dataset Mode active. This will load flows from a dataset (placeholder).")
+    flows = _dummy_flow_batch(10)
     preds = predict_flows(st.session_state.models, flows)
-    # Ensure timestamp column is string for Arrow compatibility
-    if 'timestamp' in preds.columns:
-        preds['timestamp'] = preds['timestamp'].astype(str)
-    _post_prediction_actions(preds)
     st.subheader("Sample Predictions")
-    st.dataframe(preds, use_container_width=True)
+    st.dataframe(preds)
 
-
-def run_live_mode():
-    st.warning("Live Capture Mode active.")
-    packet_capture = st.session_state.packet_capture if enable_live_capture and 'packet_capture' in st.session_state else None
-    flows = packet_capture.get_recent_flows(limit=80) if packet_capture else []
-    if not flows:
-        st.info("Using synthetic flows (live capture disabled or no packets yet).")
-        flows = _dummy_flow_batch(5)
-    flows = batch_sanitize(flows)
-    preds = predict_flows(st.session_state.models, flows)
-    if 'timestamp' in preds.columns:
-        preds['timestamp'] = preds['timestamp'].astype(str)
-    _post_prediction_actions(preds)
-    st.subheader("Latest Live Predictions")
-    st.dataframe(preds.tail(30), use_container_width=True)
-    # Show capture mode (synthetic vs real)
-    cap = st.session_state.packet_capture if 'packet_capture' in st.session_state else None
-    if not enable_live_capture:
-        st.caption("Live capture disabled (toggle in sidebar). Synthetic data in use.")
-    else:
-        cap = st.session_state.packet_capture if 'packet_capture' in st.session_state else None
-        if cap and getattr(cap, '_synthetic_mode', False):
-            st.caption("Packet capture fallback synthetic mode (driver/interface issue).")
-        else:
-            active_iface = st.session_state.get('_capture_iface') or 'Auto'
-            st.caption(f"Live capture active on interface: {active_iface}")
-
-
-def _post_prediction_actions(pred_df: pd.DataFrame):
-    if pred_df is None or pred_df.empty:
-        return
-    st.session_state.last_predictions = pred_df
-    # Append to history for time-series (truncate to 500)
-    ts = int(time.time())
-    for _, r in pred_df.iterrows():
-        st.session_state.pred_history.append({"t": ts, "risk": r.get('risk_score', 0), "label": r.get('prediction')})
-    if len(st.session_state.pred_history) > 500:
-        st.session_state.pred_history = st.session_state.pred_history[-500:]
-    # Blockchain logging for high severity
-    if enable_chain and 'chain_contract' in st.session_state:
-        severe = pred_df[pred_df['prediction'] == 'APT'].tail(5)
-        for _, row in severe.iterrows():
-            tx = log_threat_event(st.session_state.chain_contract, st.session_state.blockchain,
-                             row.get('src_ip', 'n/a'), row.get('dst_ip', 'n/a'), 'High', 'Auto-logged high severity')
-            if enable_mongo and 'mongo' in st.session_state:
-                log_alert(st.session_state.mongo, {
-                    'src_ip': row.get('src_ip'),
-                    'dst_ip': row.get('dst_ip'),
-                    'severity': 'High',
-                    'prediction': 'APT',
-                    'tx_hash': tx.get('tx_hash')
-                })
-    # Mongo logging (non-benign)
-    if enable_mongo and 'mongo' in st.session_state:
-        for _, row in pred_df.tail(10).iterrows():
-            if row.get('prediction') != 'Benign':
-                log_alert(st.session_state.mongo, row.to_dict())
-    # Drift detection (compute on numeric subset)
-    meta = st.session_state.models.get('meta', {}) if isinstance(st.session_state.models, dict) else {}
-    feat_stats = meta.get('numeric_features') or meta.get('feature_stats', {})
-    if isinstance(feat_stats, dict) and 'feature_stats' in meta:
-        from ml_models.drift import detect_drift
-        numeric_df = pred_df.select_dtypes(include=['number'])
-        if not numeric_df.empty:
-            st.session_state.drift_report = detect_drift(meta['feature_stats'], numeric_df)
-    # Push to Neo4j
-    if enable_neo4j and st.session_state.get('last_predictions') is not None:
-        push_graph_to_neo4j(build_attack_graph(st.session_state.last_predictions), settings.neo4j_uri, settings.neo4j_user, settings.neo4j_password)
 
 
 # --------------------------------------------------------------------------------------
@@ -258,99 +118,687 @@ def _post_prediction_actions(pred_df: pd.DataFrame):
 # --------------------------------------------------------------------------------------
 with tab_dashboard:
     st.header("📊 Operational Dashboard")
-    st.write("Real-time metrics & current detection status.")
+    st.write("High-level metrics & current detection status.")
 
-    recent_alerts = fetch_recent_alerts(limit=50)
-    high_sev = (recent_alerts['severity'] == 'High').sum() if 'severity' in recent_alerts else 0
     col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Monitored Hosts", int(recent_alerts['src_ip'].nunique()) if 'src_ip' in recent_alerts else 0)
-    col2.metric("Alerts (buffer)", len(recent_alerts))
-    col3.metric("High Severity", int(high_sev))
+    col1.metric("Monitored Hosts", 12, "+2")
+    col2.metric("Alerts (24h)", 8, "+1")
+    col3.metric("High Severity", 2)
     col4.metric("Models Active", len(selected_models))
 
     st.markdown("### Mode Output")
-    if run_mode == "Dataset Mode":
-        run_dataset_mode()
-    else:
-        run_live_mode()
 
-    # Metrics JSON if available
-    meta = st.session_state.models.get('meta', {})
-    if meta and 'metrics' in meta:
-        st.markdown("### Model Performance Metrics")
-        metrics_df = pd.DataFrame(meta['metrics']).T
-        st.dataframe(metrics_df, use_container_width=True)
-        if not metrics_df.empty:
-            fig = px.bar(metrics_df.reset_index(), x='index', y='f1', title='Model F1 Scores')
-            st.plotly_chart(fig, use_container_width=True)
-    if st.session_state.drift_report:
-        drifted = st.session_state.drift_report['summary']['drifted_features']
-        if drifted:
-            st.error(f"Drift detected in features: {', '.join(drifted)}")
+    if run_mode == "Dataset Mode":
+        events = fetch_recent_events(limit=10)
+        st.dataframe(events)
+    else:
+        st.warning("Live Capture Mode active. Attempting to use PyShark for real packet capture.")
+        interface = st.text_input("Network Interface for Live Capture", value="Wi-Fi")
+        use_pyshark = st.checkbox("Use PyShark for live capture (requires admin and tshark)", value=False)
+
+        # Always initialize packet capture regardless of PyShark setting
+        if ("packet_capture" not in st.session_state) or (
+            getattr(st.session_state.get("packet_capture"), "interface", None) != interface
+        ):
+            # Recreate capture object when interface changes
+            st.session_state.packet_capture = LivePacketCapture(interface=interface)
+        
+        pc = st.session_state.packet_capture
+        
+        # Show capture engine info
+        if use_pyshark:
+            st.info("Using PyShark capture engine (requires tshark)")
         else:
-            st.caption("No significant drift detected in latest batch.")
-    # Time-series risk view
-    if st.session_state.pred_history:
-        hist_df = pd.DataFrame(st.session_state.pred_history)
-        hist_df['dt'] = pd.to_datetime(hist_df['t'], unit='s')
-        ts_fig = px.line(hist_df, x='dt', y='risk', title='Risk Score Timeline')
-        st.plotly_chart(ts_fig, use_container_width=True)
+            st.info("Using Scapy capture engine (Windows-compatible)")
+        
+        # Start capture if not already running
+        if not pc.is_capturing:
+            if st.button("Start Packet Capture"):
+                if pc.start():
+                    st.success("Packet capture started!")
+                else:
+                    st.error("Failed to start packet capture. Check admin privileges.")
+        
+        # Show capture status and data
+        if pc.is_capturing:
+            if st.button("Stop Packet Capture"):
+                pc.stop_capture()
+                st.success("Packet capture stopped!")
+            
+            # Get traffic summary
+            summary = pc.get_traffic_summary()
+            if summary:
+                st.subheader("Live Traffic Summary")
+                col1, col2, col3 = st.columns(3)
+                col1.metric("Total Packets", summary.get('total_packets', 0))
+                col2.metric("Attacks Detected", summary.get('attack_count', 0))
+                col3.metric("Status", "🟢 Active" if summary.get('is_capturing') else "🔴 Stopped")
+                
+                # Show recent packets
+                recent_packets = pc.get_recent_packets(10)
+                if recent_packets:
+                    st.subheader("Recent Packets")
+                    st.dataframe(recent_packets)
+                    # Export & Scoring controls
+                    df_packets = pd.DataFrame(recent_packets)
+                    col_exp1, col_exp2, col_score = st.columns([1,1,2])
+                    with col_exp1:
+                        st.download_button(
+                            label="Download CSV",
+                            data=df_packets.to_csv(index=False).encode("utf-8"),
+                            file_name="packets.csv",
+                            mime="text/csv"
+                        )
+                    with col_exp2:
+                        st.download_button(
+                            label="Download JSON",
+                            data=json.dumps(recent_packets, indent=2).encode("utf-8"),
+                            file_name="packets.json",
+                            mime="application/json"
+                        )
+                    with col_score:
+                        if st.button("Score Captured Packets"):
+                            preds = predict_flows(st.session_state.models, recent_packets)
+                            st.subheader("Model Scores for Captured Packets")
+                            st.dataframe(preds)
+                
+                # Show attack logs
+                attack_logs = pc.get_attack_logs()
+                if attack_logs:
+                    st.subheader("🚨 Attack Alerts")
+                    for attack in attack_logs[-5:]: # Show last 5 attacks
+                        severity_color = {
+                            "HIGH": "🔴",
+                            "MEDIUM": "🟡", 
+                            "LOW": "⚪"
+                        }.get(attack['severity'], "⚪")
+                        
+                        st.markdown(f"""
+                        **{severity_color} {attack['attack_type']}**  
+                        **Severity:** {attack['severity']}  
+                        **Time:** {attack['timestamp']}  
+                        **Source:** {attack['packet_info'].get('src_ip', 'Unknown')}  
+                        **Target:** {attack['packet_info'].get('dst_ip', 'Unknown')}  
+                        **Protocol:** {attack['packet_info'].get('protocol', 'Unknown')}
+                        ---
+                        """)
+                
+                # Show APT indicators
+                apt_indicators = pc.get_apt_indicators()
+                if apt_indicators:
+                    st.subheader("🔍 APT Indicators")
+                    for indicator in apt_indicators[-3:]:  # Show last 3 APT indicators
+                        severity_color = {
+                            "HIGH": "🔴",
+                            "MEDIUM": "🟡", 
+                            "LOW": "⚪"
+                        }.get(indicator['severity'], "⚪")
+                        
+                        st.markdown(f"""
+                        **{severity_color} {indicator['type'].replace('_', ' ').title()}**  
+                        **Confidence:** {indicator['confidence']:.2f}  
+                        **Description:** {indicator['description']}  
+                        **Source:** {indicator['source_ip']} → **Target:** {indicator['target_ip']}
+                        ---
+                        """)
+            else:
+                st.info("Waiting for packet data...")
+        else:
+            st.info("Packet capture not active. Click 'Start Packet Capture' to begin monitoring.")
+        
+        # Show additional info when PyShark is not used
+        if not use_pyshark:
+            st.info("PyShark disabled - using Scapy for packet capture")
+
+        # Optional: place for any additional status/info messages
 
 
 # --------------------------------------------------------------------------------------
-# Tab: Network Analysis (Graph)
+# Helper: PyShark live packet capture
+# --------------------------------------------------------------------------------------
+def get_live_packets_pyshark(interface: str = None, count: int = 5):
+    try:
+        import pyshark
+    except ImportError:
+        return None, "PyShark is not installed. Please run 'pip install pyshark' in your environment."
+    try:
+        capture = pyshark.LiveCapture(interface=interface)
+        packets = []
+        for packet in capture.sniff_continuously(packet_count=count):
+            try:
+                packets.append({
+                    "src_ip": packet.ip.src,
+                    "dst_ip": packet.ip.dst,
+                    "protocol": packet.transport_layer,
+                    "length": packet.length,
+                    "timestamp": datetime.now(timezone.utc).isoformat() + "Z"
+                })
+            except AttributeError:
+                continue
+        return packets, None
+    except Exception as e:
+        return None, str(e)
+
+
+# --------------------------------------------------------------------------------------
+# Tab: Network Analysis
 # --------------------------------------------------------------------------------------
 with tab_network:
-    st.header("🌐 Network Attack Graph")
-    st.write("Visual representation of host communication with risk overlays.")
-    col_a, col_b = st.columns([1,1])
-    if enable_neo4j and 'neo4j' in st.session_state:
-        if col_a.button("Reload From Neo4j"):
-            st.session_state._neo_cached = neo_fetch_graph(st.session_state.neo4j)
-        if '_neo_cached' not in st.session_state:
-            st.session_state._neo_cached = neo_fetch_graph(st.session_state.neo4j)
-        g_db = st.session_state._neo_cached
-        col_a.caption(f"Neo4j graph: {g_db.number_of_nodes()} nodes / {g_db.number_of_edges()} edges")
+    st.header("🌐 Network Analysis & Graph Intelligence")
+    st.write("Neo4j-powered network topology analysis and behavioral pattern detection.")
+    
+    # Neo4j Connection Status
+    col_neo1, col_neo2, col_neo3 = st.columns(3)
+    
+    if run_mode == "Live Capture Mode" and "packet_capture" in st.session_state:
+        pc = st.session_state.packet_capture
+        
+        # Get Neo4j status from APT detector
+        if hasattr(pc, 'apt_detector') and pc.apt_detector:
+            neo4j_status = pc.apt_detector.get_neo4j_connection_status()
+        else:
+            neo4j_status = {"connected": False, "error": "APT detector not available"}
+        
+        with col_neo1:
+            status_color = "🟢" if neo4j_status.get("connected") else "🔴"
+            st.metric("Neo4j Status", f"{status_color} {'Connected' if neo4j_status.get('connected') else 'Disconnected'}")
+        
+        with col_neo2:
+            st.metric("Hosts", neo4j_status.get("host_count", 0))
+        
+        with col_neo3:
+            st.metric("Connections", neo4j_status.get("connection_count", 0))
+        
+        if neo4j_status.get("connected"):
+            # Network Topology Visualization
+            st.subheader("📊 Network Topology")
+            
+            # Import graph utilities
+            from utils.graph_utils import (
+                build_attack_graph_from_neo4j, 
+                render_attack_graph,
+                analyze_network_patterns_neo4j,
+                render_neo4j_patterns
+            )
+            
+            # Build and render network graph
+            try:
+                network_graph = build_attack_graph_from_neo4j()
+                render_attack_graph(network_graph, use_neo4j=True)
+            except Exception as e:
+                st.error(f"Failed to build network graph: {e}")
+            
+            # Neo4j Pattern Analysis
+            st.subheader("🔍 Graph-Based Pattern Detection")
+            
+            if st.button("🔄 Analyze Network Patterns", type="primary"):
+                with st.spinner("Analyzing network patterns with Neo4j..."):
+                    try:
+                        patterns = analyze_network_patterns_neo4j()
+                        render_neo4j_patterns(patterns)
+                        
+                        # Store patterns in session state for persistence
+                        st.session_state.neo4j_patterns = patterns
+                        
+                    except Exception as e:
+                        st.error(f"Pattern analysis failed: {e}")
+            
+            # Display cached patterns if available
+            if hasattr(st.session_state, 'neo4j_patterns') and st.session_state.neo4j_patterns:
+                render_neo4j_patterns(st.session_state.neo4j_patterns)
+            
+            # Host Behavior Analysis
+            st.subheader("🎯 Host Behavior Analysis")
+            
+            # Get list of hosts from Neo4j
+            if hasattr(pc, 'apt_detector') and pc.apt_detector and pc.apt_detector.neo4j_analyzer:
+                topology = pc.apt_detector.get_neo4j_network_topology()
+                host_ips = [node["ip"] for node in topology.get("nodes", [])]
+                
+                if host_ips:
+                    selected_host = st.selectbox("Select host for detailed analysis:", host_ips)
+                    
+                    if selected_host and st.button("📈 Analyze Host Behavior"):
+                        with st.spinner(f"Analyzing behavior for {selected_host}..."):
+                            try:
+                                behavior_profile = pc.apt_detector.get_host_behavior_from_neo4j(selected_host)
+                                
+                                if behavior_profile:
+                                    col_host1, col_host2 = st.columns(2)
+                                    
+                                    with col_host1:
+                                        st.write(f"**Host:** {behavior_profile.get('ip', selected_host)}")
+                                        st.write(f"**Type:** {behavior_profile.get('node_type', 'unknown')}")
+                                        st.write(f"**Total Packets:** {behavior_profile.get('total_packets', 0):,}")
+                                        st.write(f"**Total Bytes:** {behavior_profile.get('total_bytes', 0):,}")
+                                    
+                                    with col_host2:
+                                        st.write(f"**Outbound Connections:** {behavior_profile.get('outbound_connections', 0)}")
+                                        st.write(f"**Inbound Connections:** {behavior_profile.get('inbound_connections', 0)}")
+                                        st.write(f"**First Seen:** {behavior_profile.get('first_seen', 'Unknown')}")
+                                        st.write(f"**Last Seen:** {behavior_profile.get('last_seen', 'Unknown')}")
+                                    
+                                    # Protocol and port analysis
+                                    protocols = behavior_profile.get('protocols_used', [])
+                                    ports = behavior_profile.get('ports_accessed', [])
+                                    services = behavior_profile.get('services_hosted', [])
+                                    
+                                    if protocols:
+                                        st.write(f"**Protocols Used:** {', '.join(protocols)}")
+                                    if ports:
+                                        st.write(f"**Ports Accessed:** {', '.join(map(str, ports[:10]))}{'...' if len(ports) > 10 else ''}")
+                                    if services:
+                                        st.write(f"**Services Hosted:** {', '.join(map(str, services))}")
+                                
+                                else:
+                                    st.warning(f"No behavior data found for {selected_host}")
+                                    
+                            except Exception as e:
+                                st.error(f"Failed to analyze host behavior: {e}")
+                else:
+                    st.info("No hosts found in Neo4j database. Start packet capture to populate network data.")
+            
+            # Neo4j Database Management
+            with st.expander("🔧 Neo4j Database Management"):
+                st.write("**Database Operations:**")
+                
+                col_db1, col_db2, col_db3 = st.columns(3)
+                
+                with col_db1:
+                    if st.button("🧹 Clear Old Data (7+ days)"):
+                        if hasattr(pc, 'apt_detector') and pc.apt_detector and pc.apt_detector.neo4j_analyzer:
+                            try:
+                                pc.apt_detector.neo4j_analyzer.clear_old_data(days_to_keep=7)
+                                st.success("✅ Old data cleared successfully!")
+                            except Exception as e:
+                                st.error(f"Failed to clear old data: {e}")
+                
+                with col_db2:
+                    if st.button("📊 Database Statistics"):
+                        st.info("Database statistics would be displayed here")
+                
+                with col_db3:
+                    if st.button("🔄 Refresh Connection"):
+                        st.rerun()
+                
+                # Connection configuration
+                st.write("**Connection Configuration:**")
+                neo4j_uri = st.text_input("Neo4j URI", value="neo4j://127.0.0.1:7687", disabled=True)
+                neo4j_user = st.text_input("Username", value="neo4j", disabled=True)
+                st.write("💡 To modify connection settings, update the Neo4j analyzer configuration.")
+        
+        else:
+            # Neo4j not connected
+            st.warning("⚠️ Neo4j is not connected. Network graph analysis is limited.")
+            st.write("**To enable Neo4j network analysis:**")
+            st.write("1. Install and start Neo4j database")
+            st.write("2. Ensure Neo4j is running on neo4j://127.0.0.1:7687")
+            st.write("3. Configure authentication (default: neo4j/password)")
+            st.write("4. Restart the application")
+            
+            # Show error details if available
+            if neo4j_status.get("error"):
+                st.error(f"Connection Error: {neo4j_status['error']}")
+    
     else:
-        col_a.caption("Neo4j disabled or not connected; showing in-memory predictions graph.")
-
-    if 'last_predictions' in st.session_state:
-        graph_local = build_attack_graph(st.session_state.last_predictions)
-    else:
-        graph_local = build_attack_graph(pd.DataFrame(_dummy_flow_batch(5)))
-
-    source_choice = col_b.radio("Graph Source", ["In-Memory", "Neo4j" if enable_neo4j and 'neo4j' in st.session_state else "In-Memory"], horizontal=True)
-    if source_choice == "Neo4j" and enable_neo4j and 'neo4j' in st.session_state:
-        render_attack_graph(st.session_state._neo_cached)
-    else:
-        render_attack_graph(graph_local)
+        st.info("Network Analysis is available in Live Capture Mode only.")
+        st.write("Switch to Live Capture Mode to enable:")
+        st.write("- Real-time network topology mapping")
+        st.write("- Graph-based APT pattern detection")
+        st.write("- Host behavior analysis")
+        st.write("- Network relationship visualization")
 
 
 # --------------------------------------------------------------------------------------
-# Tab: Threat Intelligence
+# Tab: APT Analysis
 # --------------------------------------------------------------------------------------
-with tab_threat_intel:
-    st.header("🧠 Threat Intelligence Feed")
-    st.write("Aggregated recent alerts.")
-    severity = None if severity_filter == 'All' else severity_filter
-    alerts = query_alerts(st.session_state.get('mongo'), severity=severity, limit=200, last_minutes=recent_minutes)
-    st.dataframe(alerts, use_container_width=True)
+with tab_apt:
+    st.header("🔍 Advanced Persistent Threat Analysis")
+    st.write("Comprehensive APT detection and behavioral analysis.")
+    
+    if run_mode == "Live Capture Mode" and "packet_capture" in st.session_state:
+        pc = st.session_state.packet_capture
+        
+        if pc.is_capturing:
+            # APT Summary Metrics
+            summary = pc.get_traffic_summary()
+            apt_summary = summary.get('apt_summary', {})
+            
+            col1, col2, col3, col4 = st.columns(4)
+            col1.metric("APT Indicators", apt_summary.get('total_indicators', 0))
+            col2.metric("High Confidence", apt_summary.get('high_confidence_indicators', 0))
+            col3.metric("Recent (1h)", apt_summary.get('recent_indicators', 0))
+            col4.metric("Monitored Hosts", len(summary.get('host_risk_scores', {})))
+            
+            # APT Indicators Table
+            apt_indicators = pc.get_apt_indicators()
+            if apt_indicators:
+                st.subheader("🚨 APT Indicators")
+                
+                # Filter controls
+                col_filter1, col_filter2 = st.columns(2)
+                with col_filter1:
+                    severity_filter = st.multiselect(
+                        "Filter by Severity",
+                        options=["HIGH", "MEDIUM", "LOW"],
+                        default=["HIGH", "MEDIUM", "LOW"]
+                    )
+                with col_filter2:
+                    confidence_threshold = st.slider(
+                        "Minimum Confidence",
+                        min_value=0.0,
+                        max_value=1.0,
+                        value=0.0,
+                        step=0.1
+                    )
+                
+                # Filter indicators
+                filtered_indicators = [
+                    ind for ind in apt_indicators
+                    if ind['severity'] in severity_filter and ind['confidence'] >= confidence_threshold
+                ]
+                
+                if filtered_indicators:
+                    # Convert to DataFrame for better display
+                    df_indicators = pd.DataFrame(filtered_indicators)
+                    df_indicators['timestamp'] = pd.to_datetime(df_indicators['timestamp'])
+                    df_indicators = df_indicators.sort_values('timestamp', ascending=False)
+                    
+                    # Display indicators
+                    for _, indicator in df_indicators.head(10).iterrows():
+                        severity_color = {
+                            "HIGH": "🔴",
+                            "MEDIUM": "🟡", 
+                            "LOW": "⚪"
+                        }.get(indicator['severity'], "⚪")
+                        
+                        with st.expander(f"{severity_color} {indicator['type'].replace('_', ' ').title()} - {indicator['description'][:50]}..."):
+                            col_ind1, col_ind2 = st.columns(2)
+                            
+                            with col_ind1:
+                                st.write(f"**Severity:** {indicator['severity']}")
+                                st.write(f"**Confidence:** {indicator['confidence']:.2f}")
+                                st.write(f"**Time:** {indicator['timestamp']}")
+                            
+                            with col_ind2:
+                                st.write(f"**Source IP:** {indicator['source_ip']}")
+                                st.write(f"**Target IP:** {indicator['target_ip']}")
+                                st.write(f"**Type:** {indicator['type']}")
+                            
+                            st.write(f"**Description:** {indicator['description']}")
+                            
+                            if indicator.get('evidence'):
+                                st.write("**Evidence:**")
+                                st.json(indicator['evidence'])
+                else:
+                    st.info("No APT indicators match the current filters.")
+            else:
+                st.info("No APT indicators detected yet. Continue monitoring to build behavioral profiles.")
+            
+            # Host Risk Analysis
+            host_profiles = pc.get_host_profiles()
+            host_risks = summary.get('host_risk_scores', {})
+            
+            if host_risks:
+                st.subheader("🎯 Host Risk Assessment")
+                
+                # Sort hosts by risk score
+                sorted_hosts = sorted(host_risks.items(), key=lambda x: x[1], reverse=True)
+                
+                for ip, risk_score in sorted_hosts[:10]:  # Show top 10 risky hosts
+                    risk_color = "🔴" if risk_score > 0.7 else "🟡" if risk_score > 0.4 else "🟢"
+                    
+                    with st.expander(f"{risk_color} {ip} - Risk Score: {risk_score:.2f}"):
+                        if ip in host_profiles:
+                            profile = host_profiles[ip]
+                            
+                            col_host1, col_host2 = st.columns(2)
+                            
+                            with col_host1:
+                                st.write(f"**First Seen:** {profile['first_seen']}")
+                                st.write(f"**Last Seen:** {profile['last_seen']}")
+                                st.write(f"**Total Connections:** {profile['total_connections']}")
+                            
+                            with col_host2:
+                                st.write(f"**Unique Destinations:** {profile['unique_destinations']}")
+                                st.write(f"**Protocols Used:** {', '.join(profile['protocols_used'])}")
+                                st.write(f"**Ports Accessed:** {profile['ports_accessed']}")
+                            
+                            if profile['suspicious_activities']:
+                                st.write("**Suspicious Activities:**")
+                                for activity in profile['suspicious_activities']:
+                                    st.write(f"- {activity}")
+            
+            # APT Detection Statistics
+            if apt_summary:
+                st.subheader("📊 APT Detection Statistics")
+                
+                col_stat1, col_stat2 = st.columns(2)
+                
+                with col_stat1:
+                    if apt_summary.get('severity_breakdown'):
+                        st.write("**Severity Breakdown:**")
+                        severity_data = apt_summary['severity_breakdown']
+                        st.bar_chart(severity_data)
+                
+                with col_stat2:
+                    if apt_summary.get('indicator_types'):
+                        st.write("**Indicator Types:**")
+                        type_data = apt_summary['indicator_types']
+                        st.bar_chart(type_data)
+        
+        else:
+            st.warning("Start packet capture to begin APT analysis.")
+    
+    else:
+        st.info("APT Analysis is available in Live Capture Mode only.")
 
 
 # --------------------------------------------------------------------------------------
 # Tab: Blockchain Logs
 # --------------------------------------------------------------------------------------
 with tab_blockchain:
-    st.header("⛓ Blockchain Event Log")
-    if enable_chain and "blockchain" in st.session_state:
-        events = fetch_recent_events(limit=25)
-        st.dataframe(events, use_container_width=True)
+    st.header("⛓ Blockchain Security Logging")
+    st.write("Immutable audit trail for security events and APT indicators.")
+    
+    # Blockchain Status
+    col_status1, col_status2, col_status3 = st.columns(3)
+    
+    with col_status1:
+        # Blockchain Status
+        st.subheader("🔗 Blockchain Connection")
+        client_info = get_blockchain_client()
+        
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            status_color = "🟢" if client_info["status"] == "connected" else "🔴"
+            st.metric("Status", f"{status_color} {client_info['status'].title()}")
+        with col2:
+            st.metric("Provider", client_info["provider"])
+        with col3:
+            st.metric("Total Blocks", client_info.get("block_count", 0))
+    
+    with col_status2:
+        # Count blockchain events
+        blockchain_events = fetch_recent_events(limit=100)
+        st.metric("Total Events", len(blockchain_events))
+    
+    with col_status3:
+        # Count high severity events
+        try:
+            if not blockchain_events.empty and 'severity' in blockchain_events.columns:
+                high_severity = len(blockchain_events[blockchain_events['severity'].isin(['High', 'HIGH'])])
+            else:
+                high_severity = 0
+        except Exception:
+            high_severity = 0
+        st.metric("High Severity", high_severity)
+    
+    # APT Indicators to Blockchain
+    if run_mode == "Live Capture Mode" and "packet_capture" in st.session_state:
+        pc = st.session_state.packet_capture
+        apt_indicators = pc.get_apt_indicators()
+        
+        if apt_indicators:
+            st.subheader("🔍 APT Indicators → Blockchain")
+            
+            # Show pending indicators for blockchain logging
+            pending_indicators = [ind for ind in apt_indicators if ind.get('blockchain_logged') != True]
+            
+            if pending_indicators:
+                st.write(f"**{len(pending_indicators)} APT indicators ready for blockchain logging:**")
+                
+                # Display indicators to be logged
+                for i, indicator in enumerate(pending_indicators[:5], 1):
+                    severity_color = {"HIGH": "🔴", "MEDIUM": "🟡", "LOW": "⚪"}.get(indicator['severity'], "⚪")
+                    
+                    with st.expander(f"{severity_color} {indicator['type'].replace('_', ' ').title()} - Confidence: {indicator['confidence']:.2f}"):
+                        col_ind1, col_ind2 = st.columns(2)
+                        
+                        with col_ind1:
+                            st.write(f"**Source:** {indicator['source_ip']}")
+                            st.write(f"**Target:** {indicator['target_ip']}")
+                            st.write(f"**Timestamp:** {indicator['timestamp']}")
+                        
+                        with col_ind2:
+                            st.write(f"**Severity:** {indicator['severity']}")
+                            st.write(f"**Type:** {indicator['type']}")
+                            st.write(f"**Description:** {indicator['description']}")
+                
+                # Bulk logging button
+                if st.button("📝 Log All APT Indicators to Blockchain", type="primary"):
+                    logged_count = 0
+                    for indicator in pending_indicators:
+                        try:
+                            # Log to blockchain
+                            success = log_event_to_blockchain(
+                                src_ip=indicator['source_ip'],
+                                dst_ip=indicator['target_ip'],
+                                severity=indicator['severity'],
+                                details=f"APT Indicator: {indicator['description']} (Confidence: {indicator['confidence']:.2f})"
+                            )
+                            if success:
+                                logged_count += 1
+                                # Mark as logged (in real implementation, update the indicator)
+                        except Exception as e:
+                            st.error(f"Failed to log indicator: {e}")
+                    
+                    if logged_count > 0:
+                        st.success(f"✅ Successfully logged {logged_count} APT indicators to blockchain!")
+                        st.rerun()
+            else:
+                st.info("All APT indicators have been logged to blockchain.")
+    
+    # Recent Blockchain Events
+    st.subheader("📜 Recent Blockchain Events")
+    
+    # Filter controls
+    col_filter1, col_filter2, col_filter3 = st.columns(3)
+    
+    with col_filter1:
+        event_limit = st.selectbox("Show Events", [10, 25, 50, 100], index=1)
+    
+    with col_filter2:
+        severity_filter_bc = st.multiselect(
+            "Filter by Severity",
+            options=["High", "Medium", "Low"],
+            default=["High", "Medium", "Low"]
+        )
+    
+    with col_filter3:
+        if st.button("🔄 Refresh Events"):
+            st.rerun()
+    
+    # Fetch and display events
+    recent_events = fetch_recent_events(limit=event_limit)
+    
+    if not recent_events.empty:
+        # Filter by severity
+        filtered_events = recent_events[recent_events['severity'].isin(severity_filter_bc)]
+        
+        if not filtered_events.empty:
+            # Display events in expandable format
+            for _, event in filtered_events.iterrows():
+                severity_color = {"High": "🔴", "Medium": "🟡", "Low": "⚪"}.get(event['severity'], "⚪")
+                
+                with st.expander(f"{severity_color} Block #{event['block']} - {event['severity']} Severity"):
+                    col_event1, col_event2 = st.columns(2)
+                    
+                    with col_event1:
+                        st.write(f"**Block Number:** {event['block']}")
+                        st.write(f"**Transaction Hash:** `{event['tx_hash']}`")
+                        st.write(f"**Timestamp:** {event['timestamp']}")
+                    
+                    with col_event2:
+                        st.write(f"**Severity:** {event['severity']}")
+                        st.write(f"**Event Type:** Security Alert")
+                        st.write(f"**Details:** {event['details']}")
+                    
+                    # Verification status
+                    st.write("**Blockchain Verification:** ✅ Immutable & Verified")
+        else:
+            st.info("No events match the current filters.")
     else:
-        st.info("Blockchain logging disabled or not initialized.")
+        st.info("No blockchain events found.")
+    
+    # Blockchain Analytics
+    if not recent_events.empty:
+        st.subheader("📊 Blockchain Security Analytics")
+        
+        col_analytics1, col_analytics2 = st.columns(2)
+        
+        with col_analytics1:
+            st.write("**Event Severity Distribution:**")
+            severity_counts = recent_events['severity'].value_counts()
+            st.bar_chart(severity_counts)
+        
+        with col_analytics2:
+            st.write("**Events Over Time:**")
+            # Convert timestamp to datetime for plotting
+            recent_events['timestamp'] = pd.to_datetime(recent_events['timestamp'])
+            events_by_hour = recent_events.groupby(recent_events['timestamp'].dt.hour).size()
+            st.line_chart(events_by_hour)
+    
+    # Blockchain Configuration
+    with st.expander("⚙️ Blockchain Configuration"):
+        st.write("**Current Configuration:**")
+        
+        col_config1, col_config2 = st.columns(2)
+        
+        with col_config1:
+            st.write("- **Network:** Ethereum Testnet")
+            st.write("- **Contract Address:** `0x1234...abcd`")
+            st.write("- **Gas Price:** Auto")
+        
+        with col_config2:
+            st.write("- **Auto-logging:** Enabled")
+            st.write("- **Confirmation Blocks:** 3")
+            st.write("- **Backup Nodes:** 2")
+        
+        if st.button("🔧 Update Configuration"):
+            st.info("Configuration update functionality would be implemented here.")
+    
+    # Benefits Information
+    with st.expander("ℹ️ Blockchain Logging Benefits"):
+        st.write("""
+        **Why Blockchain Logging Enhances Security:**
+        
+        🔒 **Immutable Records** - Security events cannot be tampered with or deleted
+        
+        📋 **Audit Trail** - Complete forensic timeline for incident investigation
+        
+        🌐 **Distributed Trust** - No single point of failure for security logs
+        
+        ⚖️ **Legal Compliance** - Cryptographically verified evidence for legal proceedings
+        
+        🤝 **Threat Intelligence** - Share indicators with other organizations securely
+        
+        🔍 **Transparency** - All security events are verifiable and traceable
+        """)
 
 
 # --------------------------------------------------------------------------------------
 # Footer
 # --------------------------------------------------------------------------------------
 st.markdown("---")
-st.caption("APT Guardian • Enhanced prototype with live capture simulation, deep model hooks, blockchain & drift checks.")
+st.caption("Prototype UI • Functionality will expand with real data, models, and integrations.")

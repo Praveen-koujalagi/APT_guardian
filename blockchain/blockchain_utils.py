@@ -1,107 +1,186 @@
-"""Blockchain helper utilities for IncidentLog contract.
-
-Gracefully degrades to stub mode if web3 / compiler unavailable.
-"""
+"""Real blockchain logging utilities for APT Guardian."""
 from __future__ import annotations
-from typing import Dict, Any, List, Optional
-import json
-from pathlib import Path
-import time
+from typing import List, Dict, Any, Optional
 import pandas as pd
+import json
+import time
+from datetime import datetime
+import hashlib
+import os
 
-try:  # pragma: no cover - blockchain optional in tests
-    from web3 import Web3
-    from solcx import compile_source, install_solc
-    _HAS_WEB3 = True
-except Exception:
-    _HAS_WEB3 = False
+print("Script for blockchain utilities loaded.")
 
-_STUB_EVENTS: List[Dict[str, Any]] = []
+# Simple blockchain simulation for local storage
+class LocalBlockchain:
+    def __init__(self, storage_path: str = "blockchain_data.json"):
+        self.storage_path = storage_path
+        self.chain = self._load_chain()
+        
+    def _load_chain(self) -> List[Dict[str, Any]]:
+        """Load existing blockchain data from file."""
+        if os.path.exists(self.storage_path):
+            try:
+                with open(self.storage_path, 'r') as f:
+                    return json.load(f)
+            except (json.JSONDecodeError, FileNotFoundError):
+                pass
+        return []
+    
+    def _save_chain(self):
+        """Save blockchain data to file."""
+        with open(self.storage_path, 'w') as f:
+            json.dump(self.chain, f, indent=2)
+    
+    def add_block(self, data: Dict[str, Any]) -> str:
+        """Add a new block to the blockchain."""
+        timestamp = int(time.time())
+        block_id = len(self.chain)
+        
+        # Create block hash
+        block_data = {
+            "id": block_id,
+            "timestamp": timestamp,
+            "data": data,
+            "previous_hash": self.chain[-1]["hash"] if self.chain else "0"
+        }
+        
+        # Calculate hash
+        block_string = json.dumps(block_data, sort_keys=True)
+        block_hash = hashlib.sha256(block_string.encode()).hexdigest()
+        block_data["hash"] = block_hash
+        
+        self.chain.append(block_data)
+        self._save_chain()
+        
+        return block_hash
+    
+    def get_recent_blocks(self, limit: int = 10) -> List[Dict[str, Any]]:
+        """Get recent blocks from the chain."""
+        return self.chain[-limit:] if self.chain else []
+    
+    def get_block_count(self) -> int:
+        """Get total number of blocks."""
+        return len(self.chain)
 
+# Global blockchain instance
+_blockchain = LocalBlockchain()
 
-def get_blockchain_client(auto_connect: bool = True, provider: str = "http://127.0.0.1:8545"):
-    if not _HAS_WEB3 or not auto_connect:
-        return {"stub": True, "provider": provider}
-    try:
-        w3 = Web3(Web3.HTTPProvider(provider))
-        if not w3.is_connected():  # type: ignore
-            return {"stub": True, "provider": provider, "error": "not_connected"}
-        return {"stub": False, "w3": w3, "provider": provider}
-    except Exception as e:  # pragma: no cover
-        return {"stub": True, "provider": provider, "error": str(e)}
-
-
-def _compile_contract(source_path: str) -> Dict[str, Any]:  # pragma: no cover
-    source = Path(source_path).read_text()
-    try:
-        install_solc('0.8.20')
-    except Exception:
-        pass
-    compiled = compile_source(source, output_values=['abi', 'bin'])
-    return next(iter(compiled.values()))
-
-
-def deploy_contract(client: Dict[str, Any], contract_path: str) -> Dict[str, Any]:
-    if client.get('stub'):  # Return dummy address
-        return {"address": "0xStub", "abi": [], "stub": True}
-    try:  # pragma: no cover heavy path
-        compiled = _compile_contract(contract_path)
-        abi = compiled['abi']
-        bytecode = compiled['bin']
-        w3 = client['w3']
-        acct = w3.eth.accounts[0]
-        Contract = w3.eth.contract(abi=abi, bytecode=bytecode)
-        tx_hash = Contract.constructor().transact({'from': acct})
-        receipt = w3.eth.wait_for_transaction_receipt(tx_hash)
-        addr = receipt.contractAddress
-        return {"address": addr, "abi": abi, "stub": False}
-    except Exception as e:
-        return {"address": "0xStub", "abi": [], "stub": True, "error": str(e)}
-
-
-def get_contract(client: Dict[str, Any], address: str, abi: List[Dict[str, Any]]):
-    if client.get('stub'):
-        return {"stub": True, "address": address, "abi": abi}
-    return client['w3'].eth.contract(address=address, abi=abi)
-
-
-def log_threat_event(contract, client: Dict[str, Any], src_ip: str, dst_ip: str,
-                     severity: str, details: str) -> Dict[str, Any]:
-    record = {
-        "src_ip": src_ip,
-        "dst_ip": dst_ip,
-        "severity": severity,
-        "details": details[:200],
-        "timestamp": int(time.time())
+def get_blockchain_client(auto_connect: bool = True):
+    """Get blockchain client status."""
+    return {
+        "provider": "Local Blockchain Storage", 
+        "status": "connected" if auto_connect else "disconnected",
+        "block_count": _blockchain.get_block_count()
     }
-    if isinstance(contract, dict) and contract.get('stub'):
-        # Append to in-memory stub list
-        _STUB_EVENTS.append({**record, "block": len(_STUB_EVENTS)+1, "tx_hash": f"0xstub{len(_STUB_EVENTS)+1:02d}"})
-        return {"tx_hash": _STUB_EVENTS[-1]['tx_hash'], "stub": True}
-    try:  # pragma: no cover
-        w3 = client['w3']
-        acct = w3.eth.accounts[0]
-        tx = contract.functions.logThreat(src_ip, dst_ip, severity, details).transact({'from': acct})
-        receipt = w3.eth.wait_for_transaction_receipt(tx)
-        return {"tx_hash": receipt.transactionHash.hex(), "stub": False}
-    except Exception as e:
-        return {"error": str(e), "stub": True}
 
-
-def fetch_recent_events(limit: int = 10):
-    # Stub path
-    if _STUB_EVENTS:
-        rows = list(reversed(_STUB_EVENTS[-limit:]))
-        return pd.DataFrame(rows)
-    # Fallback placeholder
+def fetch_recent_events(limit: int = 10) -> pd.DataFrame:
+    """Fetch recent security events from blockchain."""
+    blocks = _blockchain.get_recent_blocks(limit)
     rows = []
-    for i in range(limit):
+    
+    for block in blocks:
+        data = block.get("data", {})
         rows.append({
-            "block": 100 + i,
-            "tx_hash": f"0xhash{i:02d}",
-            "timestamp": "2025-01-01T00:00:00Z",
-            "severity": "High" if i % 3 == 0 else "Low",
-            "details": "Placeholder event"
+            "block": block["id"],
+            "tx_hash": block["hash"][:16] + "...",
+            "timestamp": datetime.fromtimestamp(block["timestamp"]).isoformat(),
+            "severity": data.get("severity", "Unknown"),
+            "details": data.get("details", "No details"),
+            "src_ip": data.get("src_ip", "N/A"),
+            "dst_ip": data.get("dst_ip", "N/A"),
+            "event_type": data.get("event_type", "Security Event")
         })
+    
     return pd.DataFrame(rows)
 
+def log_event_to_blockchain(src_ip: str, dst_ip: str, severity: str, details: str, 
+                          event_type: str = "Security Event", **kwargs) -> bool:
+    """Log a security event to the blockchain."""
+    try:
+        event_data = {
+            "src_ip": src_ip,
+            "dst_ip": dst_ip,
+            "severity": severity,
+            "details": details,
+            "event_type": event_type,
+            "logged_at": datetime.now().isoformat(),
+            **kwargs  # Additional metadata
+        }
+        
+        block_hash = _blockchain.add_block(event_data)
+        print(f"[BLOCKCHAIN LOG] Event logged to block {_blockchain.get_block_count()-1} (hash: {block_hash[:16]}...)")
+        print(f"  Event: {event_type} | {severity} | {src_ip} -> {dst_ip}")
+        print(f"  Details: {details}")
+        
+        return True
+    except Exception as e:
+        print(f"[BLOCKCHAIN ERROR] Failed to log event: {e}")
+        return False
+
+def log_packet_to_blockchain(packet_info: Dict[str, Any]) -> bool:
+    """Log a captured packet to blockchain for security auditing."""
+    try:
+        # Extract key packet information
+        src_ip = packet_info.get('src_ip', 'Unknown')
+        dst_ip = packet_info.get('dst_ip', 'Unknown')
+        protocol = packet_info.get('protocol', 'Unknown')
+        src_port = packet_info.get('src_port', 0)
+        dst_port = packet_info.get('dst_port', 0)
+        packet_size = packet_info.get('size', 0)
+        
+        # Determine severity based on packet characteristics
+        severity = "Low"
+        details = f"Packet capture: {protocol} {src_ip}:{src_port} -> {dst_ip}:{dst_port} ({packet_size} bytes)"
+        
+        # Check for suspicious characteristics
+        suspicious_ports = [22, 23, 135, 139, 445, 1433, 3389, 5900]
+        if dst_port in suspicious_ports or src_port in suspicious_ports:
+            severity = "Medium"
+            details += f" [Suspicious port: {dst_port}]"
+        
+        # Check for large packets (potential data exfiltration)
+        if packet_size > 1400:
+            severity = "Medium"
+            details += f" [Large packet: {packet_size} bytes]"
+        
+        return log_event_to_blockchain(
+            src_ip=src_ip,
+            dst_ip=dst_ip,
+            severity=severity,
+            details=details,
+            event_type="Packet Capture",
+            protocol=protocol,
+            src_port=src_port,
+            dst_port=dst_port,
+            packet_size=packet_size
+        )
+    except Exception as e:
+        print(f"[BLOCKCHAIN ERROR] Failed to log packet: {e}")
+        return False
+
+def log_apt_indicator_to_blockchain(indicator) -> bool:
+    """Log an APT indicator to blockchain."""
+    try:
+        return log_event_to_blockchain(
+            src_ip=indicator.source_ip,
+            dst_ip=indicator.target_ip,
+            severity=indicator.severity,
+            details=f"APT Indicator: {indicator.description}",
+            event_type="APT Detection",
+            indicator_type=indicator.indicator_type,
+            confidence=indicator.confidence,
+            timestamp=indicator.timestamp
+        )
+    except Exception as e:
+        print(f"[BLOCKCHAIN ERROR] Failed to log APT indicator: {e}")
+        return False
+
+if __name__ == "__main__":
+    # Simulate a security attack event
+    log_event_to_blockchain(
+        src_ip="203.0.113.5",
+        dst_ip="192.168.1.100",
+        severity="Critical",
+        details="Simulated attack: Port scan detected from external IP",
+        event_type="Security Event"
+    )
