@@ -2,6 +2,42 @@
 from __future__ import annotations
 from typing import List, Dict, Any
 import pandas as pd
+import logging
+from blockchain.blockchain_utils import log_event_to_blockchain
+
+def setup_logger(name: str = "APT_Guardian", level: int = logging.INFO):
+    """Set up a logger for the application."""
+    logger = logging.getLogger(name)
+    
+    # Avoid adding multiple handlers if logger already exists
+    if logger.handlers:
+        return logger
+    
+    logger.setLevel(level)
+    
+    # Create console handler
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(level)
+    
+    # Create formatter
+    formatter = logging.Formatter(
+        '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
+    console_handler.setFormatter(formatter)
+    
+    # Add handler to logger
+    logger.addHandler(console_handler)
+    
+    return logger
+
+def log_security_event(src_ip: str, dst_ip: str, severity: str, details: str):
+    """
+    Log a security event to the blockchain and (optionally) to other log sinks.
+    """
+    # Log to blockchain
+    log_event_to_blockchain(src_ip, dst_ip, severity, details)
+    # You can also add local logging here if needed
+    print(f"[SECURITY EVENT] src_ip={src_ip}, dst_ip={dst_ip}, severity={severity}, details={details}")
 
 
 def get_mongo_client():  # placeholder
