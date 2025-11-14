@@ -3,7 +3,6 @@
 Simple packet capture test script to diagnose issues
 """
 import time
-import sys
 import os
 
 def test_basic_imports():
