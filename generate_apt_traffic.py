@@ -3,7 +3,6 @@
 import time
 import random
 from datetime import datetime, timedelta
-from typing import List, Dict, Any
 
 # Import your packet capture system
 try:
