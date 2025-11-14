@@ -22,9 +22,10 @@ def ping_hosts():
             sock.settimeout(1)
             result = sock.connect_ex((host, 80))
             sock.close()
-            print(f"   ✅ Connected to {host}")
-        except:
-            print(f"   ❌ Failed to connect to {host}")
+            if result == 0:
+                print(f"   ✅ Connected to {host}")
+            else:
+                print(f"   ❌ Failed to connect to {host}")
 
 def browse_websites():
     """Visit websites to generate HTTP/HTTPS traffic."""
