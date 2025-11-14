@@ -7,8 +7,6 @@ This script creates actual network connections that will be captured.
 import socket
 import time
 import requests
-from urllib.parse import urlparse
-
 def ping_hosts():
     """Ping multiple hosts to generate ICMP traffic."""
     hosts = ["8.8.8.8", "1.1.1.1", "208.67.222.222"]  # Google, Cloudflare, OpenDNS
