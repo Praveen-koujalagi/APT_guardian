@@ -699,7 +699,7 @@ if __name__ == "__main__":
             summary = pc.get_traffic_summary()
             print(f"\rPackets: {summary.get('total_packets', 0)}, Attacks: {summary.get('attack_count', 0)}", end="")
         
-        pc.stop()
+        pc.stop_capture()
         print(f"\n✅ Final summary: {pc.get_traffic_summary()}")
     else:
         print("❌ Failed to start packet capture")
