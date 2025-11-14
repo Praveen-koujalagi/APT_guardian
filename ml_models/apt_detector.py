@@ -25,11 +25,7 @@ except ImportError:
     NEO4J_AVAILABLE = False
 
 # Blockchain integration
-try:
-    # from blockchain.blockchain_utils import log_event_to_blockchain  # Removed unused import
-    BLOCKCHAIN_AVAILABLE = True
-except ImportError:
-    BLOCKCHAIN_AVAILABLE = False
+BLOCKCHAIN_AVAILABLE = True
 
 
 @dataclass
