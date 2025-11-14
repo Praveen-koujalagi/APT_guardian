@@ -13,7 +13,6 @@ from typing import Dict, List, Any, Optional, Tuple, Set
 from datetime import datetime, timezone, timedelta
 from collections import defaultdict, deque
 import ipaddress
-import re
 import math
 import statistics
 from dataclasses import dataclass, field
