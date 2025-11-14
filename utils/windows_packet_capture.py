@@ -282,7 +282,7 @@ class WindowsPacketCapture:
             # 30% chance of generating APT-like patterns
             if random.random() < 0.3:
                 # Generate suspicious patterns
-                pattern_type = random.choice(['beaconing', 'lateral_movement', 'port_scan', 'data_exfil'])
+                pattern_type = random.choice(['beaconing', 'lateral_movement', 'port_scan', 'data_exfil', 'brute_force', 'dns_tunneling'])
                 
                 if pattern_type == 'beaconing':
                     # Regular beaconing to external server
@@ -323,6 +323,35 @@ class WindowsPacketCapture:
                         "length": 60,  # Small SYN packets
                         "packet_count": 1,
                         "byte_count": 60,
+                        "timestamp": packet_timestamp.isoformat() + "Z"
+                    }
+                
+                elif pattern_type == 'brute_force':
+                    # Brute force attack - rapid connection attempts
+                    target_ports = [22, 23, 3389, 445, 1433, 3306, 5432]  # SSH, Telnet, RDP, SMB, SQL ports
+                    packet_info = {
+                        "src_ip": "192.168.1.60",  # Attacker IP
+                        "dst_ip": "192.168.1.10",  # Target server
+                        "src_port": random.randint(49152, 65535),
+                        "dst_port": random.choice(target_ports),  # Common brute force targets
+                        "protocol": "TCP",
+                        "length": random.randint(60, 150),  # Small auth packets
+                        "packet_count": random.randint(5, 20),  # Multiple rapid attempts
+                        "byte_count": random.randint(500, 3000),  # Multiple auth attempts
+                        "timestamp": packet_timestamp.isoformat() + "Z"
+                    }
+                
+                elif pattern_type == 'dns_tunneling':
+                    # DNS tunneling - large DNS queries for data exfiltration
+                    packet_info = {
+                        "src_ip": "192.168.1.85",  # Compromised host
+                        "dst_ip": random.choice(["8.8.8.8", "1.1.1.1", "208.67.222.222"]),  # DNS servers
+                        "src_port": random.randint(49152, 65535),
+                        "dst_port": 53,  # DNS port
+                        "protocol": "UDP",
+                        "length": random.randint(200, 512),  # Unusually large DNS queries
+                        "packet_count": random.randint(3, 10),  # Multiple queries
+                        "byte_count": random.randint(1000, 5000),  # Large payload for DNS
                         "timestamp": packet_timestamp.isoformat() + "Z"
                     }
                 

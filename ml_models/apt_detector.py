@@ -98,6 +98,10 @@ class APTDetector:
             'lateral_movement_threshold': 5,  # unique internal IPs
             'port_scan_threshold': 20,  # unique ports
             'dns_tunnel_entropy_threshold': 4.0,
+            'dns_query_threshold': 15,
+            'dns_time_window': 300,  # seconds
+            'brute_force_attempt_threshold': 12,
+            'brute_force_connection_threshold': 5,
             'unusual_port_threshold': 0.95,  # percentile
         }
         
@@ -105,6 +109,8 @@ class APTDetector:
         self.connection_history: Dict[str, deque] = defaultdict(lambda: deque(maxlen=1000))
         self.dns_queries: Dict[str, List[Dict]] = defaultdict(list)
         self.file_transfers: Dict[str, List[Dict]] = defaultdict(list)
+        self.last_dns_alerts: Dict[str, datetime] = {}
+        self.last_brute_force_alerts: Dict[tuple, datetime] = {}
         
     def _load_c2_domains(self) -> Set[str]:
         """Load known C2 domains from threat intelligence."""
@@ -144,6 +150,7 @@ class APTDetector:
         indicators.extend(self._detect_persistence_mechanisms(packets))
         indicators.extend(self._detect_reconnaissance(packets))
         indicators.extend(self._detect_dns_tunneling(packets))
+        indicators.extend(self._detect_brute_force_attacks())
         indicators.extend(self._detect_beaconing_behavior())
         
         # Run Neo4j-powered detection algorithms
@@ -174,6 +181,10 @@ class APTDetector:
             # Fallback to current time if timestamp parsing fails
             timestamp = datetime.now()
         
+        # Normalize timestamp to naive UTC for consistent comparisons
+        if timestamp.tzinfo is not None:
+            timestamp = timestamp.astimezone(timezone.utc).replace(tzinfo=None)
+        
         # Update source host profile
         if src_ip not in self.host_profiles:
             self.host_profiles[src_ip] = HostProfile(
@@ -202,8 +213,28 @@ class APTDetector:
             'dst_ip': dst_ip,
             'dst_port': packet.get('dst_port'),
             'protocol': packet.get('protocol'),
-            'length': packet.get('length', 0)
+            'length': packet.get('length', 0),
+            'packet_count': packet.get('packet_count', 1),
+            'packet': packet
         })
+        
+        # Track DNS queries for tunneling detection
+        dst_port = packet.get('dst_port')
+        src_port = packet.get('src_port')
+        if dst_port == 53 or src_port == 53:
+            dns_entry = {
+                'timestamp': timestamp,
+                'packet': packet
+            }
+            self.dns_queries[src_ip].append(dns_entry)
+            
+            # Remove old entries beyond the configured window
+            dns_window = self.thresholds.get('dns_time_window', self.time_window)
+            cutoff_time = datetime.utcnow() - timedelta(seconds=dns_window)
+            self.dns_queries[src_ip] = [
+                entry for entry in self.dns_queries[src_ip]
+                if entry['timestamp'] >= cutoff_time
+            ]
     
     def _detect_c2_communication(self, packets: List[Dict[str, Any]]) -> List[APTIndicator]:
         """Detect Command & Control communication patterns."""
@@ -439,33 +470,119 @@ class APTDetector:
         """Detect DNS tunneling attempts."""
         indicators = []
         
-        # Look for DNS traffic (port 53) with suspicious characteristics
-        dns_packets = [p for p in packets if p.get('dst_port') == 53 or p.get('src_port') == 53]
+        dns_threshold = self.thresholds.get('dns_query_threshold', 15)
+        dns_window = self.thresholds.get('dns_time_window', 300)
+        now = datetime.utcnow()
         
-        if not dns_packets:
-            return indicators
-        
-        # Group by source IP
-        dns_by_source = defaultdict(list)
-        for packet in dns_packets:
-            src_ip = packet.get('src_ip')
-            if src_ip:
-                dns_by_source[src_ip].append(packet)
-        
-        # Check for excessive DNS queries (potential tunneling)
-        for src_ip, dns_list in dns_by_source.items():
-            if len(dns_list) > 50:  # Threshold for suspicious DNS activity
+        for src_ip, query_entries in list(self.dns_queries.items()):
+            # Keep only recent entries within the window
+            recent_entries = [
+                entry for entry in query_entries
+                if (now - entry['timestamp']).total_seconds() <= dns_window
+            ]
+            
+            if len(recent_entries) != len(query_entries):
+                self.dns_queries[src_ip] = recent_entries
+            
+            if not recent_entries:
+                continue
+            
+            total_queries = sum(entry['packet'].get('packet_count', 1) for entry in recent_entries)
+            average_size = (
+                sum(entry['packet'].get('length', 0) for entry in recent_entries) /
+                max(total_queries, 1)
+            )
+            unique_dns_servers = {entry['packet'].get('dst_ip') for entry in recent_entries}
+            
+            if total_queries >= dns_threshold or average_size >= 200:
+                last_alert = self.last_dns_alerts.get(src_ip)
+                if last_alert and (now - last_alert).total_seconds() < dns_window / 2:
+                    continue
+                
+                severity = "HIGH" if total_queries >= dns_threshold * 2 else "MEDIUM"
+                confidence = min(0.95, 0.4 + total_queries / 40)
+                
                 indicators.append(APTIndicator(
                     indicator_type="DNS_TUNNELING",
-                    severity="MEDIUM",
-                    confidence=0.6,
-                    description=f"Excessive DNS queries: {len(dns_list)} queries",
-                    evidence={"query_count": len(dns_list)},
+                    severity=severity,
+                    confidence=confidence,
+                    description=f"Potential DNS tunneling: {total_queries} queries in {dns_window}s window",
+                    evidence={
+                        "query_count": total_queries,
+                        "average_query_size": average_size,
+                        "dns_servers": list(unique_dns_servers),
+                        "time_window_seconds": dns_window
+                    },
                     timestamp=datetime.now(timezone.utc),
                     source_ip=src_ip,
                     target_ip="dns_servers",
-                    related_packets=dns_list
+                    related_packets=[entry['packet'] for entry in recent_entries[:20]]
                 ))
+                
+                self.last_dns_alerts[src_ip] = now
+        
+        return indicators
+    
+    def _detect_brute_force_attacks(self) -> List[APTIndicator]:
+        """Detect brute force authentication attempts."""
+        indicators = []
+        brute_ports = {22, 23, 3389, 445, 1433, 3306, 5432}
+        attempt_threshold = self.thresholds.get('brute_force_attempt_threshold', 12)
+        connection_threshold = self.thresholds.get('brute_force_connection_threshold', 5)
+        window_seconds = min(self.time_window, 600)
+        now = datetime.utcnow()
+        
+        for src_ip, history in self.connection_history.items():
+            attempts: Dict[Tuple[str, int], Dict[str, Any]] = defaultdict(lambda: {
+                'attempts': 0,
+                'connections': 0,
+                'packets': []
+            })
+            
+            for entry in history:
+                dst_ip = entry.get('dst_ip')
+                dst_port = entry.get('dst_port')
+                timestamp = entry.get('timestamp')
+                
+                if not dst_ip or dst_port not in brute_ports:
+                    continue
+                
+                if not timestamp or (now - timestamp).total_seconds() > window_seconds:
+                    continue
+                
+                key = (dst_ip, dst_port)
+                attempts[key]['attempts'] += entry.get('packet_count', 1)
+                attempts[key]['connections'] += 1
+                if entry.get('packet'):
+                    attempts[key]['packets'].append(entry['packet'])
+            
+            for (dst_ip, dst_port), data in attempts.items():
+                if data['attempts'] >= attempt_threshold or data['connections'] >= connection_threshold:
+                    alert_key = (src_ip, dst_ip, dst_port)
+                    last_alert = self.last_brute_force_alerts.get(alert_key)
+                    if last_alert and (now - last_alert).total_seconds() < window_seconds / 2:
+                        continue
+                    
+                    severity = "HIGH" if data['attempts'] >= attempt_threshold * 2 else "MEDIUM"
+                    confidence = min(0.95, 0.5 + data['attempts'] / 30)
+                    
+                    indicators.append(APTIndicator(
+                        indicator_type="BRUTE_FORCE_ATTACK",
+                        severity=severity,
+                        confidence=confidence,
+                        description=f"Brute force attempts detected against {dst_ip}:{dst_port}",
+                        evidence={
+                            "attempts": data['attempts'],
+                            "connection_count": data['connections'],
+                            "time_window_seconds": window_seconds
+                        },
+                        timestamp=datetime.now(timezone.utc),
+                        source_ip=src_ip,
+                        target_ip=f"{dst_ip}:{dst_port}",
+                        related_packets=data['packets'][:20]
+                    ))
+                    
+                    self.last_brute_force_alerts[alert_key] = now
         
         return indicators
     

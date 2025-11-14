@@ -295,7 +295,16 @@ with tab_network:
         
         # Get Neo4j status from APT detector
         if hasattr(pc, 'apt_detector') and pc.apt_detector:
-            neo4j_status = pc.apt_detector.get_neo4j_connection_status()
+            try:
+                neo4j_status = pc.apt_detector.get_neo4j_connection_status()
+                # Force a fresh connection check if status shows disconnected
+                if not neo4j_status.get("connected", False):
+                    # Try to reconnect and get fresh status
+                    if hasattr(pc.apt_detector, 'neo4j_analyzer') and pc.apt_detector.neo4j_analyzer:
+                        pc.apt_detector.neo4j_analyzer.connect()
+                        neo4j_status = pc.apt_detector.get_neo4j_connection_status()
+            except Exception as e:
+                neo4j_status = {"connected": False, "error": f"Connection check failed: {e}"}
         else:
             neo4j_status = {"connected": False, "error": "APT detector not available"}
         
@@ -419,11 +428,14 @@ with tab_network:
                 
                 with col_db3:
                     if st.button("🔄 Refresh Connection"):
+                        # Force refresh of Neo4j connection status
+                        if hasattr(pc, 'apt_detector') and pc.apt_detector and hasattr(pc.apt_detector, 'neo4j_analyzer'):
+                            pc.apt_detector.neo4j_analyzer.connect()
                         st.rerun()
                 
                 # Connection configuration
                 st.write("**Connection Configuration:**")
-                neo4j_uri = st.text_input("Neo4j URI", value="neo4j://127.0.0.1:7687", disabled=True)
+                neo4j_uri = st.text_input("Neo4j URI", value="bolt://127.0.0.1:7687", disabled=True)
                 neo4j_user = st.text_input("Username", value="neo4j", disabled=True)
                 st.write("💡 To modify connection settings, update the Neo4j analyzer configuration.")
         
@@ -432,7 +444,7 @@ with tab_network:
             st.warning("⚠️ Neo4j is not connected. Network graph analysis is limited.")
             st.write("**To enable Neo4j network analysis:**")
             st.write("1. Install and start Neo4j database")
-            st.write("2. Ensure Neo4j is running on neo4j://127.0.0.1:7687")
+            st.write("2. Ensure Neo4j is running on bolt://127.0.0.1:7687")
             st.write("3. Configure authentication (default: neo4j/password)")
             st.write("4. Restart the application")
             
