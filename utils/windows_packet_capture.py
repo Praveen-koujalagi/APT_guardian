@@ -19,7 +19,9 @@ try:
     from scapy.all import sniff, get_if_list, get_if_addr, conf
     from scapy.layers.inet import IP, TCP, UDP, ICMP
 except ImportError:
-    pass
+    # If scapy is not available, set related names to None so code can check before use
+    sniff = get_if_list = get_if_addr = conf = None
+    IP = TCP = UDP = ICMP = None
 
 # Import APT detector
 try:
