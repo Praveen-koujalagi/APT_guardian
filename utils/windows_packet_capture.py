@@ -25,7 +25,7 @@ except ImportError:
 
 # Import APT detector
 try:
-    from ml_models.apt_detector import APTDetector, APTIndicator
+    from ml_models.apt_detector import APTDetector
     _HAS_APT_DETECTOR = True
 except ImportError:
     _HAS_APT_DETECTOR = False
