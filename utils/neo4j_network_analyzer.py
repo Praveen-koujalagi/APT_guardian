@@ -5,7 +5,7 @@ for modeling packet relationships, network topology, and behavioral patterns.
 """
 
 from __future__ import annotations
-from typing import Dict, List, Any, Optional, Tuple, Set
+from typing import Dict, List, Any, Optional
 from datetime import datetime, timezone, timedelta
 from dataclasses import dataclass
 import json
