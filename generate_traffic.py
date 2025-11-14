@@ -6,7 +6,6 @@ This script creates actual network connections that will be captured.
 
 import socket
 import time
-import threading
 import requests
 from urllib.parse import urlparse
 
