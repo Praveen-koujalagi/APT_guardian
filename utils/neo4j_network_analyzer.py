@@ -495,7 +495,7 @@ class Neo4jNetworkAnalyzer:
         
         try:
             with self.driver.session() as session:
-                result = session.run(query, days=days_to_keep)
+                session.run(query, days=days_to_keep)
                 self.logger.info(f"Cleared old network data (older than {days_to_keep} days)")
         except Exception as e:
             self.logger.error(f"Failed to clear old data: {e}")
