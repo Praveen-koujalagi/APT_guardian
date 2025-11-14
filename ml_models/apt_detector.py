@@ -16,7 +16,6 @@ import ipaddress
 import math
 import statistics
 from dataclasses import dataclass, field
-import json
 
 # Neo4j integration
 try:
