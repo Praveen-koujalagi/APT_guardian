@@ -2,7 +2,7 @@
 from __future__ import annotations
 import networkx as nx
 import streamlit as st
-from typing import Dict, List, Any, Optional
+from typing import Dict, Any, Optional
 import pandas as pd
 from datetime import datetime, timezone
 
