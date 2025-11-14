@@ -26,13 +26,10 @@ except ImportError:
 
 # Blockchain integration
 try:
-    from blockchain.blockchain_utils import log_event_to_blockchain
+    # from blockchain.blockchain_utils import log_event_to_blockchain  # Removed unused import
     BLOCKCHAIN_AVAILABLE = True
 except ImportError:
     BLOCKCHAIN_AVAILABLE = False
-    def log_event_to_blockchain(*args, **kwargs):
-        """Fallback function when blockchain is not available."""
-        return False
 
 
 @dataclass
