@@ -78,7 +78,8 @@ class WindowsPacketCapture:
             if pyshark:
                 capture = pyshark.LiveCapture()
                 interfaces.extend(capture.interfaces)
-        except:
+        except Exception:
+            # Ignore errors if PyShark is not available or fails to list interfaces
             pass
         
         try:
