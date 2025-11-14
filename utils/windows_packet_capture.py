@@ -86,8 +86,8 @@ class WindowsPacketCapture:
             # Try Scapy
             scapy_interfaces = get_if_list()
             interfaces.extend(scapy_interfaces)
-        except:
-            pass
+        except Exception as e:
+            self.logger.error(f"Error getting interfaces with Scapy: {e}")
         
         return list(set(interfaces))  # Remove duplicates
     
