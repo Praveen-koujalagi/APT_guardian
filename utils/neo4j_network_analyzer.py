@@ -48,7 +48,7 @@ class NetworkRelationship:
 class Neo4jNetworkAnalyzer:
     """Neo4j-powered network analysis for APT detection."""
     
-    def __init__(self, uri: str = "neo4j://127.0.0.1:7687", 
+    def __init__(self, uri: str = "bolt://127.0.0.1:7687", 
                  username: str = "neo4j", 
                  password: str = "VNPS6437"):
         """Initialize Neo4j connection."""
@@ -505,7 +505,7 @@ class Neo4jNetworkAnalyzer:
 _neo4j_analyzer: Optional[Neo4jNetworkAnalyzer] = None
 
 
-def get_neo4j_analyzer(uri: str = "neo4j://127.0.0.1:7687", 
+def get_neo4j_analyzer(uri: str = "bolt://127.0.0.1:7687", 
                       username: str = "neo4j", 
                       password: str = "VNPS6437") -> Neo4jNetworkAnalyzer:
     """Get or create Neo4j network analyzer instance."""

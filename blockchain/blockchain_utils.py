@@ -4,7 +4,7 @@ from typing import List, Dict, Any, Optional
 import pandas as pd
 import json
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 import hashlib
 import os
 
@@ -83,7 +83,7 @@ def fetch_recent_events(limit: int = 10) -> pd.DataFrame:
         rows.append({
             "block": block["id"],
             "tx_hash": block["hash"][:16] + "...",
-            "timestamp": datetime.fromtimestamp(block["timestamp"]).isoformat(),
+            "timestamp": datetime.fromtimestamp(block["timestamp"], timezone.utc).isoformat(),
             "severity": data.get("severity", "Unknown"),
             "details": data.get("details", "No details"),
             "src_ip": data.get("src_ip", "N/A"),
@@ -103,7 +103,7 @@ def log_event_to_blockchain(src_ip: str, dst_ip: str, severity: str, details: st
             "severity": severity,
             "details": details,
             "event_type": event_type,
-            "logged_at": datetime.now().isoformat(),
+            "logged_at": datetime.now(timezone.utc).isoformat(),
             **kwargs  # Additional metadata
         }
         
