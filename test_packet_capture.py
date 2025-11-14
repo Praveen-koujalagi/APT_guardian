@@ -173,8 +173,6 @@ def main():
     
     if interfaces:
         print(f"✅ Network interfaces: {len(interfaces)} found")
-    else:
-        print("❌ Network interfaces: None detected")
     
     print("\n💡 To fix packet capture issues:")
     print("   1. Run as Administrator")
