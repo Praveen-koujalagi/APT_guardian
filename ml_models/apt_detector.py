@@ -221,7 +221,7 @@ class APTDetector:
             
             # Remove old entries beyond the configured window
             dns_window = self.thresholds.get('dns_time_window', self.time_window)
-            cutoff_time = datetime.utcnow() - timedelta(seconds=dns_window)
+            cutoff_time = datetime.now(timezone.utc) - timedelta(seconds=dns_window)
             self.dns_queries[src_ip] = [
                 entry for entry in self.dns_queries[src_ip]
                 if entry['timestamp'] >= cutoff_time
