@@ -16,11 +16,11 @@ except ImportError:
     pyshark = None
 
 try:
-    from scapy.all import sniff, get_if_list, get_if_addr, conf
+    from scapy.all import sniff, get_if_list
     from scapy.layers.inet import IP, TCP, UDP, ICMP
 except ImportError:
     # If scapy is not available, set related names to None so code can check before use
-    sniff = get_if_list = get_if_addr = conf = None
+    sniff = get_if_list = None
     IP = TCP = UDP = ICMP = None
 
 # Import APT detector
