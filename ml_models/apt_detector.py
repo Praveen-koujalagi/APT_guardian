@@ -463,7 +463,7 @@ class APTDetector:
         
         dns_threshold = self.thresholds.get('dns_query_threshold', 15)
         dns_window = self.thresholds.get('dns_time_window', 300)
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         
         for src_ip, query_entries in list(self.dns_queries.items()):
             # Keep only recent entries within the window
