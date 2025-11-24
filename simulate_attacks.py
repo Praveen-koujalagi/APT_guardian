@@ -28,7 +28,8 @@ def simulate_port_scan(target_ip="127.0.0.1", ports=None):
             sock.close()
             time.sleep(0.05)  # Small delay
         except Exception as e:
-            pass
+            # Log the error but continue scanning other ports
+            print(f"   ⚠️ Error scanning port {port}: {e}")
     
     print("✅ Port scan simulation complete!")
 
