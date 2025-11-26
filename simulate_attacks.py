@@ -98,8 +98,8 @@ def simulate_normal_traffic(target_ip="127.0.0.1"):
                 sock.connect((target_ip, port))
                 sock.close()
                 time.sleep(0.2)
-            except:
-                pass
+            except Exception as e:
+                print(f"   ⚠️ Error simulating normal traffic on port {port}: {e}")
     
     print("✅ Normal traffic simulation complete!")
 
