@@ -53,7 +53,7 @@ def simulate_ddos(target_ip="127.0.0.1", duration=10):
                     print(f"   📦 Sent {packet_count} packets...")
                 
                 time.sleep(0.01)  # Very rapid sending
-            except:
+            except Exception:
                 pass
         
         print(f"✅ DDoS simulation complete! Sent {packet_count} packets.")
