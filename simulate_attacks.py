@@ -8,7 +8,6 @@ WARNING: This is for testing purposes only. Do not use on production networks.
 import time
 import socket
 import threading
-import random
 from datetime import datetime
 
 def simulate_port_scan(target_ip="127.0.0.1", ports=None):
