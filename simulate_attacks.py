@@ -79,8 +79,9 @@ def simulate_suspicious_activity(target_ip="127.0.0.1"):
             print(f"   🔓 Connected to suspicious port {port}")
             sock.close()
             time.sleep(0.1)
-        except:
-            pass
+        except Exception as e:
+            # Ignore connection errors to suspicious ports to continue simulation
+            print(f"   ⚠️ Error connecting to suspicious port {port}: {e}")
     
     print("✅ Suspicious activity simulation complete!")
 
